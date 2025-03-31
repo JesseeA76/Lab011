@@ -1,77 +1,51 @@
+import streamlit as st
 import pandas as pd
-import numpy as np
-import joblib
-import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense, Dropout
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras.callbacks import EarlyStopping
+import pickle
+import tensorflow as tf
 
-# Load the dataset
-data = pd.read_csv('lab_11_bridge_data.csv')
+# Function to load model and preprocessor with caching
+@st.cache_resource
+def get_model_and_preprocessor():
+    model_path = 'tf_bridge_model.h5'
+    preprocessor_path = 'preprocessor.pkl'
 
-# Handle missing values for numerical features only
-numerical_features = ['Span_ft', 'Deck_Width_ft', 'Age_Years', 'Num_Lanes', 'Condition_Rating']
-data[numerical_features] = data[numerical_features].fillna(data[numerical_features].mean())
+    # Load preprocessor
+    with open(preprocessor_path, 'rb') as file:
+        preprocessor = pickle.load(file)
+    
+    # Load model without compiling
+    model = tf.keras.models.load_model(model_path, compile=False)
+    
+    return model, preprocessor
 
-# One-hot encode the 'Material' categorical variable
-data = pd.get_dummies(data, columns=['Material'])
+# Load assets
+model, preprocessor = get_model_and_preprocessor()
 
-# Normalize/standardize numerical features
-scaler = StandardScaler()
-data[numerical_features] = scaler.fit_transform(data[numerical_features])
+# UI
+st.title("Bridge Maximum Load Prediction")
+st.write("Input the bridge details below to predict its maximum load capacity (in tons).")
 
-# Save the scaler
-joblib.dump(scaler, 'scaler.pkl')
+# Input form
+span_ft = st.number_input("Span (ft):", min_value=0.0, value=250.0)
+deck_width_ft = st.number_input("Deck Width (ft):", min_value=0.0, value=40.0)
+age_years = st.number_input("Age (Years):", min_value=0, value=20)
+num_lanes = st.number_input("Number of Lanes:", min_value=1, value=4)
+condition_rating = st.slider("Condition Rating (1 to 5):", 1, 5, 4)
+material = st.selectbox("Material:", options=["Steel", "Concrete", "Composite"])
 
-# Ensure all features are numeric
-X = data.drop(columns=['Max_Load_Tons'])
-y = data['Max_Load_Tons']
+# Run prediction
+if st.button("Predict Maximum Load"):
+    input_dict = {
+        "Span_ft": [span_ft],
+        "Deck_Width_ft": [deck_width_ft],
+        "Age_Years": [age_years],
+        "Num_Lanes": [num_lanes],
+        "Condition_Rating": [condition_rating],
+        "Material": [material]
+    }
+    
+    input_df = pd.DataFrame(input_dict)
+    input_processed = preprocessor.transform(input_df)
+    prediction = model.predict(input_processed)
 
-# Convert all columns to numeric, forcing errors to NaN
-X = X.apply(pd.to_numeric, errors='coerce')
-
-# Handle any remaining missing values
-X.fillna(0, inplace=True)
-
-# Convert DataFrame to NumPy array
-X = X.to_numpy()
-y = y.to_numpy()
-
-# Ensure all elements in the arrays are of type float
-X = X.astype(np.float32)
-y = y.astype(np.float32)
-
-# Split the data into training and test sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-# Define the ANN model
-model = Sequential([
-    Dense(64, input_dim=X_train.shape[1], activation='relu', kernel_regularizer=l2(0.01)),
-    Dropout(0.2),
-    Dense(32, activation='relu', kernel_regularizer=l2(0.01)),
-    Dropout(0.2),
-    Dense(1, activation='linear')
-])
-
-# Compile the model
-model.compile(optimizer='adam', loss='mean_squared_error')
-
-# Define early stopping
-early_stopping = EarlyStopping(monitor='val_loss', patience=10, restore_best_weights=True)
-
-# Train the model
-history = model.fit(X_train, y_train, epochs=100, batch_size=32, validation_data=(X_test, y_test), callbacks=[early_stopping])
-
-# Plot training/validation loss vs. epochs
-plt.plot(history.history['loss'], label='Training Loss')
-plt.plot(history.history['val_loss'], label='Validation Loss')
-plt.xlabel('Epochs')
-plt.ylabel('Loss')
-plt.legend()
-plt.show()
-
-# Save the model
-model.save('tf_bridge_model.h5')
+    st.success(f"Predicted Maximum Load Capacity: {prediction[0][0]:.2f} tons")
